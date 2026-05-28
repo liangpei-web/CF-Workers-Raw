@@ -79,6 +79,8 @@ export default {
 				headers.append('Authorization', `token ${githubToken}`);
 			}
 
+			headers.append('Cache-Control', 'public, max-age=86400');
+
 			// 发起请求
 			// const response = await fetch(githubRawUrl, { headers });
 			const response = await fetch(githubRawUrl, {
