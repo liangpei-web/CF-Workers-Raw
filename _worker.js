@@ -80,7 +80,11 @@ export default {
 			}
 
 			// 发起请求
-			const response = await fetch(githubRawUrl, { headers });
+			const response = await fetch(githubRawUrl, { headers,
+    cf: {
+        cacheEverything: true,
+        cacheTtl: 86400  // 缓存1天，可按需调整
+    } });
 
 			// 检查请求是否成功 (状态码 200 到 299)
 			if (response.ok) {
