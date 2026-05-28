@@ -17,11 +17,11 @@ export default {
 				githubRawUrl += url.pathname;
 			}
 			//console.log(githubRawUrl);
-			
+
 			// 初始化请求头
 			const headers = new Headers();
 			let authTokenSet = false; // 标记是否已经设置了认证token
-			
+
 			// 检查TOKEN_PATH特殊路径鉴权
 			if (env.TOKEN_PATH) {
 				const 需要鉴权的路径配置 = await ADD(env.TOKEN_PATH);
@@ -63,14 +63,14 @@ export default {
 					}
 				}
 			}
-			
+
 			// 如果TOKEN_PATH没有设置认证，使用默认token逻辑
 			if (!authTokenSet) {
 				if (env.GH_TOKEN && env.TOKEN) {
 					if (env.TOKEN == url.searchParams.get('token')) token = env.GH_TOKEN || token;
 					else token = url.searchParams.get('token') || token;
 				} else token = url.searchParams.get('token') || env.GH_TOKEN || env.TOKEN || token;
-				
+
 				const githubToken = token;
 				//console.log(githubToken);
 				if (!githubToken || githubToken == '') {
@@ -80,11 +80,16 @@ export default {
 			}
 
 			// 发起请求
-			const response = await fetch(githubRawUrl, { headers,
-    cf: {
-        cacheEverything: true,
-        cacheTtl: 86400  // 缓存1天，可按需调整
-    } });
+			// const response = await fetch(githubRawUrl, { headers });
+			const response = await fetch(githubRawUrl, {
+				headers,
+				cf: {
+					cacheEverything: true,
+					cacheTtl: 86400,  // 缓存1天，可按需调整
+					cacheKey: githubRawUrl  // 同一文件 URL 共享缓存
+				}
+			});
+
 
 			// 检查请求是否成功 (状态码 200 到 299)
 			if (response.ok) {
