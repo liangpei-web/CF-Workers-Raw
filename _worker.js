@@ -1,6 +1,5 @@
-let token = "";
 export default {
-	async fetch(request, env) {
+	async fetch(request, env, ctx) {
 		const url = new URL(request.url);
 		if (url.pathname !== '/') {
 			let githubRawUrl = 'https://raw.githubusercontent.com';
@@ -18,9 +17,15 @@ export default {
 			}
 			//console.log(githubRawUrl);
 
+			// 仅缓存 GET/HEAD 请求
+			if (!['GET', 'HEAD'].includes(request.method)) {
+				return new Response('Method Not Allowed', { status: 405 });
+			}
+
 			// 初始化请求头
 			const headers = new Headers();
 			let authTokenSet = false; // 标记是否已经设置了认证token
+			let shouldUseEdgeCache = false; // 仅在服务端 token 场景启用共享缓存
 
 			// 检查TOKEN_PATH特殊路径鉴权
 			if (env.TOKEN_PATH) {
@@ -59,6 +64,7 @@ export default {
 						}
 						headers.append('Authorization', `token ${env.GH_TOKEN}`);
 						authTokenSet = true;
+						shouldUseEdgeCache = true;
 						break; // 找到匹配的路径配置后退出循环
 					}
 				}
@@ -66,6 +72,7 @@ export default {
 
 			// 如果TOKEN_PATH没有设置认证，使用默认token逻辑
 			if (!authTokenSet) {
+				let token = '';
 				if (env.GH_TOKEN && env.TOKEN) {
 					if (env.TOKEN == url.searchParams.get('token')) token = env.GH_TOKEN || token;
 					else token = url.searchParams.get('token') || token;
@@ -77,28 +84,54 @@ export default {
 					return new Response('TOKEN不能为空', { status: 400 });
 				}
 				headers.append('Authorization', `token ${githubToken}`);
+				shouldUseEdgeCache = !!env.GH_TOKEN && githubToken === env.GH_TOKEN;
 			}
 
-			headers.append('Cache-Control', 'public, max-age=86400');
+			let cacheKey = null;
+			const cache = caches.default;
+			if (shouldUseEdgeCache) {
+				// 构造缓存 key，移除 token 参数，避免同一资源因 token 不同导致碎片化
+				const cacheKeyUrl = new URL(request.url);
+				cacheKeyUrl.searchParams.delete('token');
+				cacheKey = new Request(cacheKeyUrl.toString(), { method: 'GET' });
+
+				// 先查边缘缓存
+				const cached = await cache.match(cacheKey);
+				if (cached) {
+					const cachedHeaders = new Headers(cached.headers);
+					cachedHeaders.set('X-Worker-Cache', 'HIT');
+					return new Response(request.method === 'HEAD' ? null : cached.body, {
+						status: cached.status,
+						headers: cachedHeaders
+					});
+				}
+			}
 
 			// 发起请求
-			// const response = await fetch(githubRawUrl, { headers });
 			const response = await fetch(githubRawUrl, {
-				headers,
-				cf: {
-					cacheEverything: true,
-					cacheTtl: 86400,  // 缓存1天，可按需调整
-					cacheKey: githubRawUrl  // 同一文件 URL 共享缓存
-				}
+				headers
 			});
 
 
 			// 检查请求是否成功 (状态码 200 到 299)
 			if (response.ok) {
-				return new Response(response.body, {
+				const responseHeaders = new Headers(response.headers);
+				responseHeaders.set('Cache-Control', 'public, max-age=300, s-maxage=86400');
+				responseHeaders.set('Vary', 'Accept-Encoding');
+				responseHeaders.set('X-Worker-Cache', 'MISS');
+
+				const finalResponse = new Response(response.body, {
 					status: response.status,
-					headers: response.headers
+					headers: responseHeaders
 				});
+
+				if (shouldUseEdgeCache && cacheKey) {
+					// 异步写入边缘缓存，避免阻塞响应
+					ctx.waitUntil(cache.put(cacheKey, finalResponse.clone()));
+				} else {
+					responseHeaders.set('X-Worker-Cache', 'SKIP');
+				}
+				return finalResponse;
 			} else {
 				const errorText = env.ERROR || '无法获取文件，检查路径或TOKEN是否正确。';
 				// 如果请求不成功，返回适当的错误响应
