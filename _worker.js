@@ -26,6 +26,8 @@ export default {
 			const headers = new Headers();
 			let authTokenSet = false; // 标记是否已经设置了认证token
 			let shouldUseEdgeCache = false; // 仅在服务端 token 场景启用共享缓存
+			const refreshParam = (url.searchParams.get('refresh') || '').toLowerCase();
+			const forceRefresh = ['1', 'true', 'yes'].includes(refreshParam);
 
 			// 检查TOKEN_PATH特殊路径鉴权
 			if (env.TOKEN_PATH) {
@@ -93,17 +95,20 @@ export default {
 				// 构造缓存 key，移除 token 参数，避免同一资源因 token 不同导致碎片化
 				const cacheKeyUrl = new URL(request.url);
 				cacheKeyUrl.searchParams.delete('token');
+				cacheKeyUrl.searchParams.delete('refresh');
 				cacheKey = new Request(cacheKeyUrl.toString(), { method: 'GET' });
 
 				// 先查边缘缓存
-				const cached = await cache.match(cacheKey);
-				if (cached) {
-					const cachedHeaders = new Headers(cached.headers);
-					cachedHeaders.set('X-Worker-Cache', 'HIT');
-					return new Response(request.method === 'HEAD' ? null : cached.body, {
-						status: cached.status,
-						headers: cachedHeaders
-					});
+				if (!forceRefresh) {
+					const cached = await cache.match(cacheKey);
+					if (cached) {
+						const cachedHeaders = new Headers(cached.headers);
+						cachedHeaders.set('X-Worker-Cache', 'HIT');
+						return new Response(request.method === 'HEAD' ? null : cached.body, {
+							status: cached.status,
+							headers: cachedHeaders
+						});
+					}
 				}
 			}
 
@@ -119,6 +124,7 @@ export default {
 				responseHeaders.set('Cache-Control', 'public, max-age=300, s-maxage=86400');
 				responseHeaders.set('Vary', 'Accept-Encoding');
 				responseHeaders.set('X-Worker-Cache', 'MISS');
+				if (forceRefresh) responseHeaders.set('X-Worker-Refresh', '1');
 
 				const finalResponse = new Response(response.body, {
 					status: response.status,
